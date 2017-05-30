@@ -1,4 +1,3 @@
-{CompositeDisposable} = require "atom"
 debounce = require "lodash.debounce"
 defer = require "lodash.defer"
 sample = require "lodash.sample"
@@ -6,43 +5,17 @@ exclamationAudio = require "./play-exclamation"
 musicPlayer = require "./music-player"
 
 module.exports =
-  subscriptions: null
-  conf: []
-  isEnable: false
   currentStreak: 0
-  level: 0
+  reached: false
   maxStreakReached: false
   exclamationAudio: exclamationAudio
   musicPlayer: musicPlayer
-
-  setPluginManager: (pluginManager) ->
-    @pluginManager = pluginManager
-
-  observe: (key) ->
-    @subscriptions.add atom.config.observe(
-      "activate-power-mode.comboMode.#{key}", (value) =>
-        @conf[key] = value
-    )
-
-  enable: ->
-    @isEnable = true
-    @initConfigSubscribers()
-
-  initConfigSubscribers: ->
-    @subscriptions = new CompositeDisposable
-    @observe 'exclamationEvery'
-    @observe 'activationThreshold'
-    @observe 'exclamationTexts'
-    @subscriptions.add atom.commands.add "atom-workspace",
-      "activate-power-mode:reset-max-combo": => @resetMaxStreak()
 
   reset: ->
     @container?.parentNode?.removeChild @container
 
   destroy: ->
-    @isEnable = false
     @reset()
-    @subscriptions?.dispose()
     @container = null
     @debouncedEndStreak?.cancel()
     @debouncedEndStreak = null
@@ -52,7 +25,7 @@ module.exports =
     @exclamationsTypeAndLapseObserver?.dispose()
     @exclamationsTextsOrPathObserver?.dispose()
     @currentStreak = 0
-    @level = 0
+    @reached = false
     @maxStreakReached = false
     @musicPlayer.destroy()
 
@@ -127,42 +100,16 @@ module.exports =
 
     @renderStreak()
 
-  resetCounter: ->
-    return if @currentStreak is 0
-
-    @showExclamation "#{-@currentStreak}", 'down', false
-    @endStreak()
-
-  modifyStreak: (n) ->
-    return if @currentStreak is 0 and n < 0
-
+  increaseStreak: ->
     @lastStreak = performance.now()
     @debouncedEndStreak()
 
-    n = n * (@level + 1) if n > 0
+    @currentStreak++
 
-    oldStreak = @currentStreak
-    @currentStreak += n
-    @currentStreak = 0 if @currentStreak < 0
-
-    @streakIncreased n if n > 0
-    @streakDecreased n if n < 0
-
-    if @currentStreak is 0
-      @endStreak()
-    else
-      @refreshStreakBar()
-    @renderStreak()
-
-    if oldStreak is 0 and n > 0
-      @pluginManager.runOnComboStartStreak()
-
-  streakIncreased: (n) ->
     @container.classList.remove "combo-zero"
     if @currentStreak > @maxStreak
       @increaseMaxStreak()
 
-<<<<<<< HEAD:lib/combo-mode.coffee
     if not @reached and (@style is "killerInstinct" and @currentStreak >= 3)
       @reached = true
       @container.classList.add "reached"
@@ -178,38 +125,8 @@ module.exports =
         @chooseExclamation()
 
     @refreshStreakBar()
-=======
-    return if @checkLevel()
 
-    if @currentStreak % @conf['exclamationEvery'] is 0
-      @showExclamation()
-    else
-      @showExclamation "+#{n}", 'up', false
-
-  streakDecreased: (n) ->
-    @showExclamation "#{n}", 'down', false
->>>>>>> refs/remotes/JoelBesada/master:lib/combo-renderer.coffee
-
-    @checkLevel()
-    if @currentStreak == 0
-      @container.classList.add "combo-zero"
-
-  checkLevel: ->
-    level = 0
-    for threshold, i in @conf['activationThreshold']
-      break if @currentStreak < threshold
-      level++
-
-    if level != @level
-      @container.classList.remove "level-#{@level}"
-      @container.classList.add "level-#{level}"
-      @showExclamation "#{level+1}x", 'level', false
-      @pluginManager.runOnComboLevelChange(level, @level)
-      @level = level
-      return true
-
-  getLevel: ->
-    @level
+    @renderStreak()
 
   endStreak: ->
     if ((@exclamationEvery is 0 and not @conflict) or (@style is "killerInstinct")) and @reached
@@ -217,19 +134,13 @@ module.exports =
     if @getConfig("playBackgroundMusic.enabled") and @reached
       @musicPlayer.actionEndStreak()
     @currentStreak = 0
+    @reached = false
     @maxStreakReached = false
     @container.classList.add "combo-zero"
-    @container.classList.remove "level-#{@level}"
-    @level = 0
-    @container.classList.add "level-#{@level}"
+    @container.classList.remove "reached"
     @renderStreak()
-<<<<<<< HEAD:lib/combo-mode.coffee
     @debouncedShowExclamation?.cancel()
 
-=======
-    @refreshStreakBar(0)
-    @pluginManager.runOnComboEndStreak()
->>>>>>> refs/remotes/JoelBesada/master:lib/combo-renderer.coffee
 
   renderStreak: ->
     @counter.textContent = @currentStreak
@@ -252,24 +163,18 @@ module.exports =
       @bar.style.transition = "transform #{leftTimeout}ms linear"
     , 100
 
-  showExclamation: (text = null, type = 'message', trigger = true) ->
+  showExclamation: (text = null) ->
     exclamation = document.createElement "span"
     exclamation.classList.add "exclamation"
-<<<<<<< HEAD:lib/combo-mode.coffee
     text = sample @getConfig "comboMode.customExclamations.textsOrPath" if text is null
-=======
-    exclamation.classList.add type
-    text = sample @conf['exclamationTexts'] if text is null
->>>>>>> refs/remotes/JoelBesada/master:lib/combo-renderer.coffee
     exclamation.textContent = text
 
-    @exclamations.appendChild exclamation
+    @exclamations.insertBefore exclamation, @exclamations.childNodes[0]
     setTimeout =>
       if exclamation.parentNode is @exclamations
         @exclamations.removeChild exclamation
     , 2000
 
-<<<<<<< HEAD:lib/combo-mode.coffee
   playExclamation: ->
     @exclamationAudio.play(@currentStreak,@style)
 
@@ -287,10 +192,6 @@ module.exports =
 
   hasReached: ->
     @reached
-=======
-    if trigger
-      @pluginManager.runOnComboExclamation(text)
->>>>>>> refs/remotes/JoelBesada/master:lib/combo-renderer.coffee
 
   getMaxStreak: ->
     maxStreak = localStorage.getItem "activate-power-mode.maxStreak"
@@ -302,12 +203,7 @@ module.exports =
     @maxStreak = @currentStreak
     @max.textContent = "Max #{@maxStreak}"
     if @maxStreakReached is false
-<<<<<<< HEAD:lib/combo-mode.coffee
       @showExclamation "NEW MAX!!!"
-=======
-      @showExclamation "NEW MAX!!!", 'max-combo', false
-      @pluginManager.runOnComboMaxStreak(@maxStreak)
->>>>>>> refs/remotes/JoelBesada/master:lib/combo-renderer.coffee
     @maxStreakReached = true
 
   resetMaxStreak: ->
@@ -316,9 +212,6 @@ module.exports =
     @maxStreak = 0
     if @max
       @max.textContent = "Max 0"
-<<<<<<< HEAD:lib/combo-mode.coffee
 
   getConfig: (config) ->
     atom.config.get "activate-power-mode.#{config}"
-=======
->>>>>>> refs/remotes/JoelBesada/master:lib/combo-renderer.coffee

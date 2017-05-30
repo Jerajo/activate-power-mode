@@ -1,57 +1,88 @@
-inputHandler = require "./input-handler"
+throttle = require "lodash.throttle"
+screenShake = require "./screen-shake"
+playAudio = require "./play-audio"
+powerCanvas = require "./power-canvas"
+comboMode = require "./combo-mode"
 
 module.exports =
-  inputHandler: inputHandler
+  screenShake: screenShake
+  playAudio: playAudio
+  powerCanvas: powerCanvas
+  comboMode: comboMode
 
   enable: ->
-    @pluginManager.enable()
-    @changePaneSubscription = atom.workspace.onDidStopChangingActivePaneItem =>
-      @setupPane()
+    @throttledShake = throttle @screenShake.shake.bind(@screenShake), 100, trailing: false
+    @throttledPlayAudio = throttle @playAudio.play.bind(@playAudio), 100, trailing: false
 
-    @setupPane()
+    @activeItemSubscription = atom.workspace.onDidStopChangingActivePaneItem =>
+      @subscribeToActiveTextEditor()
+
+    @comboModeEnabledSubscription = atom.config.observe 'activate-power-mode.comboMode.enabled', (value) =>
+      @isComboMode = value
+      if @isComboMode and @editorElement
+        @comboMode.setup @editorElement
+      else
+        @comboMode.destroy()
+
+    @subscribeToActiveTextEditor()
 
   disable: ->
-    @changePaneSubscription?.dispose()
-    @inputSubscription?.dispose()
-    @cursorSubscription?.dispose()
-    @pluginManager.disable()
+    @activeItemSubscription?.dispose()
+    @editorChangeSubscription?.dispose()
+    @comboModeEnabledSubscription?.dispose()
+    @editorAddCursor?.dispose()
+    @powerCanvas.destroy()
+    @comboMode.destroy()
+    @isComboMode = false
 
-  setPluginManager: (pluginManager) ->
-    @pluginManager = pluginManager
+  subscribeToActiveTextEditor: ->
+    @powerCanvas.resetCanvas()
+    @comboMode.reset() if @isComboMode
+    @prepareEditor()
 
-  isExcludedFile: ->
-    excluded = @getConfig "excludedFileTypes.excluded"
-    @editor.getPath()?.split('.').pop() in excluded
-
-  setupPane: ->
-    @inputSubscription?.dispose()
-    @cursorSubscription?.dispose()
+  prepareEditor: ->
+    @editorChangeSubscription?.dispose()
+    @editorAddCursor?.dispose()
     @editor = atom.workspace.getActiveTextEditor()
+    return unless @editor
+    return if @editor.getPath()?.split('.').pop() in @getConfig "excludedFileTypes.excluded"
 
-    if not @editor or @isExcludedFile()
-      @pluginManager.runOnChangePane()
-      return
+    @editorElement = atom.views.getView @editor
 
-    @editorElement = @editor.getElement()
+    @powerCanvas.setupCanvas @editor, @editorElement
+    @comboMode.setup @editorElement if @isComboMode
 
-    @inputSubscription = @editor.getBuffer().onDidChange @handleInput.bind(this)
-    @cursorSubscription = @editor.observeCursors @handleCursor.bind(this)
-
-    @pluginManager.runOnChangePane @editor, @editorElement
+    @editorChangeSubscription = @editor.getBuffer().onDidChange @onChange.bind(this)
+    @editorAddCursor = @editor.observeCursors @handleCursor.bind(this)
 
   handleCursor: (cursor) ->
-    @pluginManager.runOnNewCursor cursor
+    cursor.throttleSpawnParticles = throttle @powerCanvas.spawnParticles.bind(@powerCanvas), 25, trailing: false
 
-  handleInput: (e) ->
-    requestIdleCallback =>
-      @inputHandler.handle e
-      return if @inputHandler.isGhost()
+  onChange: (e) ->
+    spawnParticles = true
+    if e.newText
+      spawnParticles = e.newText isnt "\n"
+      range = e.newRange.end
+    else
+      range = e.newRange.start
 
-      screenPos = @editor.screenPositionForBufferPosition @inputHandler.getPosition()
-      cursor = @editor.getCursorAtScreenPosition screenPos
-      return unless cursor
+    screenPosition = @editor.screenPositionForBufferPosition range
+    cursor = @editor.getCursorAtScreenPosition screenPosition
+    return unless cursor
 
-      @pluginManager.runOnInput cursor, screenPos, @inputHandler
+    if @isComboMode
+      @comboMode.increaseStreak()
+      return unless @comboMode.hasReached()
+
+    if spawnParticles and @getConfig "particles.enabled"
+      cursor.throttleSpawnParticles screenPosition
+    if @getConfig "screenShake.enabled"
+      @throttledShake @editorElement
+    if @getConfig "playAudio.enabled"
+      @throttledPlayAudio()
+
+  getCombo: ->
+    @comboMode
 
   getConfig: (config) ->
     atom.config.get "activate-power-mode.#{config}"
